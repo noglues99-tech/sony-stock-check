@@ -5,18 +5,16 @@ on:
   schedule:
     - cron: "*/5 * * * *"  # 5분마다 (UTC 기준)
 
-# 겹치는 실행 방지
 concurrency:
   group: sony-stock-checker
   cancel-in-progress: true
 
 permissions:
-  contents: write  # state.json 커밋/푸시를 위해 필요
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,14 +42,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add state.json
-
-          # 변경 없으면 커밋하지 않음
           if git diff --cached --quiet; then
             echo "No state change to commit."
             exit 0
           fi
-
           git commit -m "Update state.json"
           git push
