@@ -2,7 +2,7 @@ name: Sony Stock Check (5m + stable)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 최소 5분 간격 :contentReference[oaicite:3]{index=3}
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
