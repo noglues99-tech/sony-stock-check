@@ -3,8 +3,7 @@ name: Sony Store Stock Monitor
 on:
   workflow_dispatch:
   schedule:
-    # 테스트용: 1분마다 (확인 끝나면 */5 로 바꿔도 됨)
-    - cron: "* * * * *"
+    - cron: "*/5 * * * *"
 
 jobs:
   check:
