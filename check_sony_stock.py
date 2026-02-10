@@ -3,29 +3,31 @@ import re
 import json
 import sys
 import time
-import requests
 from pathlib import Path
+
+import requests
 from playwright.sync_api import sync_playwright
 
 TARGET_URL = "https://store.sony.co.kr/product-view/131272260"
 
-# 키워드 (이 두 개로만 판정)
+# 키워드(이 두 개로만 판정)
 SOLD_OUT_KEYWORD = "일시품절"
 BUY_NOW_KEYWORD = "바로 구매하기"
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
+# ✅ 파일명 통일 (yml 캐시도 동일 파일명으로)
 STATE_FILE = Path("last_status.json")
 
 # 알림 설정
 BURST_COUNT = 10        # 총 메시지 수
-BURST_INTERVAL = 1.0   # 초 단위 (1초마다 1개)
+BURST_INTERVAL = 1.0    # 초 단위 (1초마다 1개)
 
 
 def telegram_send(text: str) -> None:
     if not BOT_TOKEN or not CHAT_ID:
-        raise RuntimeError("텔레그램 환경변수가 설정되지 않았습니다.")
+        raise RuntimeError("텔레그램 환경변수(TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)가 설정되지 않았습니다.")
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     r = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=20)
     r.raise_for_status()
@@ -48,6 +50,7 @@ def scrape_status(url: str) -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3000)
 
@@ -116,15 +119,24 @@ def notify_buy_now_burst() -> None:
 def main() -> int:
     try:
         current_status = scrape_status(TARGET_URL)
-    except Exception:
-        # 필요하면 오류 알림 추가 가능
+        print("current_status =", current_status)
+    except Exception as e:
+        # ✅ 원인 파악용 로그
+        print("scrape_error:", repr(e))
         return 2
 
     last_status = read_last_status()
+    print("last_status =", last_status)
 
-    # BUY_NOW로 '전환'되는 순간만 10초 분산 알림
+    # BUY_NOW로 '전환'되는 순간만 10개 버스트
     if current_status == "BUY_NOW" and last_status != "BUY_NOW":
-        notify_buy_now_burst()
+        try:
+            notify_buy_now_burst()
+        except Exception as e:
+            print("telegram_error:", repr(e))
+            # 텔레그램 실패여도 상태는 저장
+            write_last_status(current_status)
+            return 3
 
     # 상태 저장
     write_last_status(current_status)
