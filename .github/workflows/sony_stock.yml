@@ -1,9 +1,9 @@
 name: Sony Store Stock Monitor
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "*/5 * * * *"
+#  workflow_dispatch:
+#  schedule:
+#    - cron: "*/5 * * * *"
 
 jobs:
   check:
