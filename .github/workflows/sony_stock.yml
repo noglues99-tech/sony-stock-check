@@ -19,6 +19,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Restore last status cache
+        uses: actions/cache@v4
+        with:
+          path: last_status.json
+          key: sony-stock-last-status
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
@@ -29,5 +35,13 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 테스트할 때만 1로 켜세요(매번 메시지 옴)
+          TEST_MODE: "1"
         run: |
           python check_sony_stock.py
+
+      - name: Save last status cache
+        uses: actions/cache@v4
+        with:
+          path: last_status.json
+          key: sony-stock-last-status
