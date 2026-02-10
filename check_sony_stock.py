@@ -17,21 +17,26 @@ BUY_NOW_KEYWORD = "바로 구매하기"
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
+# 상태/부팅 플래그 파일 (GitHub Actions에서 캐시로 유지)
 STATE_FILE = Path("last_status.json")
-
-# ✅ 최초 실행(정상 가동) 알림 1회용 플래그 파일
 BOOT_FILE = Path("boot_notified.json")
 
 # 알림 설정
-BURST_COUNT = 10        # 총 메시지 수
-BURST_INTERVAL = 1.0   # 초 단위 (1초마다 1개)
+BURST_COUNT = 10
+BURST_INTERVAL = 1.0  # seconds
 
 
 def telegram_send(text: str) -> None:
     if not BOT_TOKEN or not CHAT_ID:
-        raise RuntimeError("텔레그램 환경변수가 설정되지 않았습니다.")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 비어있습니다.")
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     r = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=20)
+
+    # ✅ 실패 원인을 Actions 로그에서 바로 보이게
+    print("telegram_status:", r.status_code)
+    print("telegram_response:", r.text[:300])
+
     r.raise_for_status()
 
 
@@ -52,6 +57,7 @@ def scrape_status(url: str) -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3000)
 
@@ -89,28 +95,35 @@ def scrape_status(url: str) -> str:
     return detect_status(texts)
 
 
-def read_last_status() -> str | None:
-    if not STATE_FILE.exists():
+def read_json(path: Path) -> dict | None:
+    if not path.exists():
         return None
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8")).get("status")
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
 
 
+def write_json(path: Path, obj: dict) -> None:
+    path.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+
+
+def read_last_status() -> str | None:
+    data = read_json(STATE_FILE)
+    return (data or {}).get("status")
+
+
 def write_last_status(status: str) -> None:
-    STATE_FILE.write_text(
-        json.dumps({"status": status}, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    write_json(STATE_FILE, {"status": status})
 
 
 def boot_notify_once(current_status: str) -> None:
     """
-    ✅ 소스가 '처음' 정상 실행되었을 때만 1회 알림.
-    (이후 실행에서는 BOOT_FILE이 존재하므로 발송하지 않음)
+    ✅ '처음 정상 실행' 딱 1회만 텔레그램 전송
+    (BOOT_FILE이 있으면 전송 안 함)
     """
     if BOOT_FILE.exists():
+        print("boot_notify: already notified (BOOT_FILE exists)")
         return
 
     msg = (
@@ -119,12 +132,8 @@ def boot_notify_once(current_status: str) -> None:
         f"- URL: {TARGET_URL}"
     )
     telegram_send(msg)
-
-    # 1회 발송 기록
-    BOOT_FILE.write_text(
-        json.dumps({"boot_notified": True, "ts": int(time.time())}, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    write_json(BOOT_FILE, {"boot_notified": True, "ts": int(time.time())})
+    print("boot_notify: sent and BOOT_FILE written")
 
 
 def notify_buy_now_burst() -> None:
@@ -140,26 +149,37 @@ def notify_buy_now_burst() -> None:
 
 
 def main() -> int:
+    # 1) 스크래핑
     try:
         current_status = scrape_status(TARGET_URL)
-    except Exception:
+        print("current_status =", current_status)
+    except Exception as e:
+        print("scrape_error:", repr(e))
         return 2
 
-    # ✅ 최초 정상 실행 알림(1회)
+    # 2) 부팅 1회 알림 (실패해도 이유는 로그로 남김)
     try:
         boot_notify_once(current_status)
-    except Exception:
-        # 부팅 알림 실패해도 메인 기능은 계속
-        pass
+    except Exception as e:
+        print("boot_notify_error:", repr(e))
 
+    # 3) 전환 감지
     last_status = read_last_status()
+    print("last_status =", last_status)
 
-    # BUY_NOW로 '전환'되는 순간만 10초 분산 알림
     if current_status == "BUY_NOW" and last_status != "BUY_NOW":
-        notify_buy_now_burst()
+        try:
+            notify_buy_now_burst()
+        except Exception as e:
+            print("buy_now_notify_error:", repr(e))
 
-    # 상태 저장
-    write_last_status(current_status)
+    # 4) 상태 저장
+    try:
+        write_last_status(current_status)
+    except Exception as e:
+        print("state_write_error:", repr(e))
+        return 4
+
     return 0
 
 
