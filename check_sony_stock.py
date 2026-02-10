@@ -2,28 +2,30 @@ import os
 import re
 import json
 import sys
+import time
 import requests
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-TARGET_URL = "https://store.sony.co.kr/product-view/123967519"
+TARGET_URL = "https://store.sony.co.kr/product-view/131272260"
 
-# 키워드(이 2개로만 판정)
+# 키워드 (이 두 개로만 판정)
 SOLD_OUT_KEYWORD = "일시품절"
 BUY_NOW_KEYWORD = "바로 구매하기"
-
-# 1이면 매번 메시지(테스트), 0이면 상태 변경시에만 메시지
-TEST_MODE = os.getenv("TEST_MODE", "0").strip() == "1"
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 STATE_FILE = Path("last_status.json")
 
+# 알림 설정
+BURST_COUNT = 10        # 총 메시지 수
+BURST_INTERVAL = 1.0   # 초 단위 (1초마다 1개)
+
 
 def telegram_send(text: str) -> None:
     if not BOT_TOKEN or not CHAT_ID:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 비어 있습니다.")
+        raise RuntimeError("텔레그램 환경변수가 설정되지 않았습니다.")
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     r = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=20)
     r.raise_for_status()
@@ -42,22 +44,14 @@ def detect_status(texts: list[str]) -> str:
     return "UNKNOWN"
 
 
-def scrape_button_texts(url: str) -> tuple[str, list[str]]:
-    """
-    JS로 렌더링되는 페이지에서 버튼/링크 텍스트를 넓게 긁어서
-    '일시품절' 또는 '바로 구매하기' 포함 여부만으로 판정.
-    """
+def scrape_status(url: str) -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-
-        # 렌더링 시간 여유
         page.wait_for_timeout(3000)
 
         texts: list[str] = []
-
-        # 텍스트가 있을 법한 요소를 넓게 수집
         selectors = [
             "button",
             "a[role='button']",
@@ -79,7 +73,6 @@ def scrape_button_texts(url: str) -> tuple[str, list[str]]:
                     if t:
                         texts.append(t)
                 except Exception:
-                    # input은 value에 있는 경우가 많음
                     try:
                         v = normalize(loc.nth(i).get_attribute("value"))
                         if v:
@@ -89,71 +82,52 @@ def scrape_button_texts(url: str) -> tuple[str, list[str]]:
 
         browser.close()
 
-    status = detect_status(texts)
-    return status, texts
-
-
-def status_ko(status: str) -> str:
-    if status == "BUY_NOW":
-        return "구매 가능(바로 구매하기)"
-    if status == "SOLD_OUT":
-        return "품절(일시품절)"
-    return "판단 불가(키워드 미검출)"
+    return detect_status(texts)
 
 
 def read_last_status() -> str | None:
     if not STATE_FILE.exists():
         return None
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        return data.get("status")
+        return json.loads(STATE_FILE.read_text(encoding="utf-8")).get("status")
     except Exception:
         return None
 
 
 def write_last_status(status: str) -> None:
-    STATE_FILE.write_text(json.dumps({"status": status}, ensure_ascii=False), encoding="utf-8")
+    STATE_FILE.write_text(
+        json.dumps({"status": status}, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+
+def notify_buy_now_burst() -> None:
+    base_text = (
+        "🔥 소니스토어 구매 가능 감지!\n"
+        "👉 지금 바로 구매하세요\n"
+        f"- URL: {TARGET_URL}"
+    )
+
+    for i in range(BURST_COUNT):
+        telegram_send(f"[{i+1}/{BURST_COUNT}]\n{base_text}")
+        time.sleep(BURST_INTERVAL)
 
 
 def main() -> int:
     try:
-        current_status, _texts = scrape_button_texts(TARGET_URL)
-    except Exception as e:
-        telegram_send(f"[소니스토어 모니터링] 오류 발생\n- URL: {TARGET_URL}\n- 내용: {e}")
+        current_status = scrape_status(TARGET_URL)
+    except Exception:
+        # 필요하면 오류 알림 추가 가능
         return 2
 
     last_status = read_last_status()
 
-    # 메시지 구성(키워드 기반 판정 결과만 전달)
-    if current_status == "BUY_NOW":
-        msg = (
-            "✅ 지금 구매하세요!\n"
-            f"- 상태: {status_ko(current_status)}\n"
-            f"- URL: {TARGET_URL}"
-        )
-    elif current_status == "SOLD_OUT":
-        msg = (
-            "ℹ️ 현재 품절중입니다.\n"
-            f"- 상태: {status_ko(current_status)}\n"
-            f"- URL: {TARGET_URL}"
-        )
-    else:
-        msg = (
-            "⚠️ 키워드(일시품절/바로 구매하기)를 찾지 못했습니다.\n"
-            f"- 상태: {status_ko(current_status)}\n"
-            f"- URL: {TARGET_URL}\n"
-            "페이지 구조 변경/로딩 문제일 수 있습니다."
-        )
+    # BUY_NOW로 '전환'되는 순간만 10초 분산 알림
+    if current_status == "BUY_NOW" and last_status != "BUY_NOW":
+        notify_buy_now_burst()
 
-    # 전송 조건
-    should_send = TEST_MODE or (last_status != current_status)
-
-    # 상태 저장(다음 실행 비교용)
+    # 상태 저장
     write_last_status(current_status)
-
-    if should_send:
-        telegram_send(msg)
-
     return 0
 
 
