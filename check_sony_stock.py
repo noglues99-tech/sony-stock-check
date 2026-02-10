@@ -10,24 +10,26 @@ from playwright.sync_api import sync_playwright
 
 TARGET_URL = "https://store.sony.co.kr/product-view/131272260"
 
-# 키워드(이 두 개로만 판정)
+# 키워드 (이 두 개로만 판정)
 SOLD_OUT_KEYWORD = "일시품절"
 BUY_NOW_KEYWORD = "바로 구매하기"
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# ✅ 파일명 통일 (yml 캐시도 동일 파일명으로)
 STATE_FILE = Path("last_status.json")
+
+# ✅ 최초 실행(정상 가동) 알림 1회용 플래그 파일
+BOOT_FILE = Path("boot_notified.json")
 
 # 알림 설정
 BURST_COUNT = 10        # 총 메시지 수
-BURST_INTERVAL = 1.0    # 초 단위 (1초마다 1개)
+BURST_INTERVAL = 1.0   # 초 단위 (1초마다 1개)
 
 
 def telegram_send(text: str) -> None:
     if not BOT_TOKEN or not CHAT_ID:
-        raise RuntimeError("텔레그램 환경변수(TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)가 설정되지 않았습니다.")
+        raise RuntimeError("텔레그램 환경변수가 설정되지 않았습니다.")
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     r = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=20)
     r.raise_for_status()
@@ -50,7 +52,6 @@ def scrape_status(url: str) -> str:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3000)
 
@@ -104,6 +105,28 @@ def write_last_status(status: str) -> None:
     )
 
 
+def boot_notify_once(current_status: str) -> None:
+    """
+    ✅ 소스가 '처음' 정상 실행되었을 때만 1회 알림.
+    (이후 실행에서는 BOOT_FILE이 존재하므로 발송하지 않음)
+    """
+    if BOOT_FILE.exists():
+        return
+
+    msg = (
+        "✅ 소니스토어 재고체커가 정상적으로 실행되었습니다.\n"
+        f"- 현재상태: {current_status}\n"
+        f"- URL: {TARGET_URL}"
+    )
+    telegram_send(msg)
+
+    # 1회 발송 기록
+    BOOT_FILE.write_text(
+        json.dumps({"boot_notified": True, "ts": int(time.time())}, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+
 def notify_buy_now_burst() -> None:
     base_text = (
         "🔥 소니스토어 구매 가능 감지!\n"
@@ -119,24 +142,21 @@ def notify_buy_now_burst() -> None:
 def main() -> int:
     try:
         current_status = scrape_status(TARGET_URL)
-        print("current_status =", current_status)
-    except Exception as e:
-        # ✅ 원인 파악용 로그
-        print("scrape_error:", repr(e))
+    except Exception:
         return 2
 
-    last_status = read_last_status()
-    print("last_status =", last_status)
+    # ✅ 최초 정상 실행 알림(1회)
+    try:
+        boot_notify_once(current_status)
+    except Exception:
+        # 부팅 알림 실패해도 메인 기능은 계속
+        pass
 
-    # BUY_NOW로 '전환'되는 순간만 10개 버스트
+    last_status = read_last_status()
+
+    # BUY_NOW로 '전환'되는 순간만 10초 분산 알림
     if current_status == "BUY_NOW" and last_status != "BUY_NOW":
-        try:
-            notify_buy_now_burst()
-        except Exception as e:
-            print("telegram_error:", repr(e))
-            # 텔레그램 실패여도 상태는 저장
-            write_last_status(current_status)
-            return 3
+        notify_buy_now_burst()
 
     # 상태 저장
     write_last_status(current_status)
