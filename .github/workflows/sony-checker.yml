@@ -3,7 +3,7 @@ name: sony-stock-checker
 on:
   workflow_dispatch:  # 수동 실행 가능
   schedule:
-    - cron: "*/5 * * * *"  # 5분마다 실행 시도
+    - cron: "*/30 * * * *"  # 5분마다 실행 시도
 
 jobs:
   check:
