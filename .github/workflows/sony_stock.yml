@@ -3,8 +3,8 @@ name: Sony Store Stock Monitor
 on:
   workflow_dispatch:
   schedule:
+    # 테스트용: 1분마다 (확인 끝나면 */5 로 바꿔도 됨)
     - cron: "* * * * *"
-
 
 jobs:
   check:
@@ -20,14 +20,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      # ✅ 캐시 복원: 가장 최근 last_status.json 가져오기
-      - name: Restore last status cache
+      # ✅ 상태/부팅 알림 파일 캐시 복원
+      - name: Restore state cache
         uses: actions/cache/restore@v4
         with:
-          path: last_status.json
-          key: sony-stock-last-status-${{ github.run_id }}
+          path: |
+            last_status.json
+            boot_notified.json
+          key: sony-stock-state-${{ github.run_id }}
           restore-keys: |
-            sony-stock-last-status-
+            sony-stock-state-
 
       - name: Install deps
         run: |
@@ -42,9 +44,11 @@ jobs:
         run: |
           python check_sony_stock.py
 
-      # ✅ 캐시 저장: 매 실행마다 새 key로 저장해서 상태 갱신
-      - name: Save last status cache
+      # ✅ 상태/부팅 알림 파일 캐시 저장
+      - name: Save state cache
         uses: actions/cache/save@v4
         with:
-          path: last_status.json
-          key: sony-stock-last-status-${{ github.run_id }}
+          path: |
+            last_status.json
+            boot_notified.json
+          key: sony-stock-state-${{ github.run_id }}
