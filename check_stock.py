@@ -171,6 +171,10 @@ def main():
     state = load_state()
     now_epoch = int(time.time())
 
+    # 🧪 텔레그램 연결 테스트 (임시)
+    send_telegram("🧪 테스트: GitHub Actions에서 텔레그램 연결 확인")
+
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
